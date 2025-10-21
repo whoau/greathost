@@ -1,64 +1,54 @@
-# .github/workflows/main.yml
-
-name: Greathost.es Auto Renew
+name: Greathost Renew
 
 on:
-  # 1. 定时触发：每30分钟运行一次
   schedule:
-    - cron: '*/30 * * * *'
-  
-  # 2. 手动触发：允许你在 Actions 页面点击 "Run workflow" 进行即时测试
+    # GitHub Actions 使用 UTC，下面这行表示北京时间 12:00 和 18:00（UTC+8 -> UTC 04:00/10:00）
+    - cron: "0 4,10 * * *"
   workflow_dispatch:
 
-jobs:
-  renew-and-report:
-    runs-on: ubuntu-latest
+permissions:
+  contents: write  # 如果需要提交 README.md 变更
 
-    # 授予工作流写入仓库内容的权限，用于自动提交 README.md
-    permissions:
-      contents: write
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: greathost-renew
+      cancel-in-progress: true
 
     steps:
-      # 第 1 步：检出你的代码库
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # 第 2 步：设置 Python 环境
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
 
-      # 第 3 步：安装 Playwright 及其依赖
-      - name: Install dependencies and Playwright browsers
+      - name: Install Playwright
         run: |
-          pip install playwright
-          python -m playwright install --with-deps
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
 
-      # 第 4 步：运行 Greathost.es 的续期脚本
-      - name: Run Greathost renew script
-        run: python greathost.py # 确保你的脚本文件名是 greathost.py
+      - name: Run renew script
         env:
-          # --- 在 GitHub Secrets 中配置以下变量 ---
-          GREATHOS_REMEMBER_COOKIE_NAME: ${{ secrets.GREATHOS_REMEMBER_COOKIE_NAME }}
-          GREATHOS_REMEMBER_COOKIE_VALUE: ${{ secrets.GREATHOS_REMEMBER_COOKIE_VALUE }}
-          GREATHOS_SERVER_URLS: ${{ secrets.GREATHOS_SERVER_URLS }}
-          
-          # --- 可选的备用认证 ---
-          GREATHOS_EMAIL: ${{ secrets.GREATHOS_EMAIL }}
-          GREATHOS_PASSWORD: ${{ secrets.GREATHOS_PASSWORD }}
-
-      # 第 5 步：提交并推送 README.md 的变动
-      - name: Commit and push if README.md changed
+          GREATHOST_URL: https://greathost.es
+          GREATHOST_SERVER_URLS: ${{ secrets.GREATHOST_SERVER_URLS }}  # 或直接写死
+          GREATHOST_REMEMBER_COOKIE_NAME: remember_web_xxx
+          GREATHOST_REMEMBER_COOKIE_VALUE: ${{ secrets.GREATHOST_REMEMBER_COOKIE_VALUE }}
+          GREATHOST_EMAIL: ${{ secrets.GREATHOST_EMAIL }}
+          GREATHOST_PASSWORD: ${{ secrets.GREATHOST_PASSWORD }}
+          HEADLESS: "true"
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add README.md
-          
-          if git diff --staged --quiet; then
-            echo "没有检测到 README.md 的变动，无需提交。"
-          else
-            git commit -m "docs: 自动更新 Greathost.es 续期状态"
+          python your_script.py
+
+      # 可选：提交 README.md 变更（脚本会生成报告）
+      - name: Commit README changes
+        if: always()
+        run: |
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add README.md screens || true
+            git commit -m "chore: update renew report [skip ci]"
             git push
-            echo "README.md 已更新并成功推送到仓库。"
           fi
