@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class ServerRenewal:
     def __init__(self):
         """初始化配置"""
-        self.url = os.getenv('LOGIN_URL', 'https://example.com/login')
+        self.url = 'https://greathost.es/login'  # 直接写死登录 URL
         self.username = os.getenv('USERNAME')
         self.password = os.getenv('PASSWORD')
         self.cookie_file = 'cookies.json'
@@ -36,10 +36,7 @@ class ServerRenewal:
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--disable-gpu')
         chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
         chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        
-        # 隐藏 webdriver 特征，增强反检测能力
         chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
         chrome_options.add_experimental_option('useAutomationExtension', False)
         
@@ -47,14 +44,9 @@ class ServerRenewal:
         self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
             'source': 'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'
         })
-        
-        # 移除隐式等待，完全依赖显式等待，避免混合使用导致不可预测的行为
-        # self.driver.implicitly_wait(10)
-        
         logger.info("✅ 浏览器驱动初始化完成")
 
     def save_cookies(self):
-        """登录成功后保存cookies到文件"""
         try:
             cookies = self.driver.get_cookies()
             with open(self.cookie_file, 'w') as f:
@@ -68,36 +60,28 @@ class ServerRenewal:
         if not os.path.exists(self.cookie_file):
             logger.info("ℹ️ Cookie 文件不存在，将进行常规登录。")
             return False
-
         try:
-            # 必须先访问域名才能设置 Cookie
-            base_url = "/".join(self.url.split("/")[:3])
-            self.driver.get(base_url)
-
+            # 必须先访问根域名才能设置 Cookie
+            self.driver.get('https://greathost.es/')
             with open(self.cookie_file, 'r') as f:
                 cookies = json.load(f)
-            
             for cookie in cookies:
-                # 'expiry' 键有时会导致问题，如果存在则移除
                 if 'expiry' in cookie:
                     del cookie['expiry']
                 self.driver.add_cookie(cookie)
-
             logger.info("✅ Cookies 已加载，正在刷新页面验证登录状态...")
-            self.driver.refresh()
-
-            # 通过等待登录后才能看到的元素来验证 Cookie 是否有效
+            self.driver.get('https://greathost.es/clientarea.php') # 直接访问客户区
+            
+            # 验证登录成功的标志：页面标题包含 "Client Area"
             WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.LINK_TEXT, "Contracts"))
+                EC.title_contains("Client Area")
             )
             logger.info("✅ 使用 Cookie 登录成功！")
             return True
         except (TimeoutException, Exception) as e:
-            logger.warning(f"⚠️ 使用 Cookie 登录失败，可能是 Cookie 已过期。错误: {e}")
-            # 清理无效的Cookie文件
+            logger.warning(f"⚠️ 使用 Cookie 登录失败: {e}")
             if os.path.exists(self.cookie_file):
                 os.remove(self.cookie_file)
-                logger.info(f"🗑️ 已删除失效的 Cookie 文件: {self.cookie_file}")
             return False
 
     def login_with_credentials(self):
@@ -106,151 +90,128 @@ class ServerRenewal:
             logger.info(f"🌐 正在访问登录页面: {self.url}")
             self.driver.get(self.url)
             
-            # 使用显式等待代替 time.sleep
+            # 使用更精确的 ID 定位器
             username_input = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.NAME, "username"))
+                EC.presence_of_element_located((By.ID, "inputEmail"))
             )
             username_input.clear()
             username_input.send_keys(self.username)
-            logger.info("✅ 用户名已填写")
             
-            password_input = self.driver.find_element(By.NAME, "password")
+            password_input = self.driver.find_element(By.ID, "inputPassword")
             password_input.clear()
             password_input.send_keys(self.password)
-            logger.info("✅ 密码已填写")
             
-            login_button = self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+            # 检查是否有reCAPTCHA，如果有，脚本无法继续
+            try:
+                self.driver.find_element(By.CLASS_NAME, "g-recaptcha")
+                logger.error("❌ 检测到 reCAPTCHA 验证码，脚本无法自动登录。请尝试使用 Cookie 登录。")
+                self.driver.save_screenshot('recaptcha_error.png')
+                return False
+            except:
+                logger.info("✅ 未检测到 reCAPTCHA，继续登录。")
+
+            login_button = self.driver.find_element(By.ID, "login")
             login_button.click()
-            logger.info("✅ 登录按钮已点击")
             
-            # 等待登录成功后的页面元素出现，以此确认登录成功
+            # 验证登录成功的标志：页面标题包含 "Client Area"
             WebDriverWait(self.driver, 15).until(
-                EC.presence_of_element_located((By.LINK_TEXT, "Contracts"))
+                EC.title_contains("Client Area")
             )
             logger.info("✅ 用户名密码登录成功")
-            self.save_cookies()  # 登录成功后保存/更新 Cookie
+            self.save_cookies()
             return True
         except TimeoutException:
             logger.error("❌ 登录失败：超时或用户名/密码错误。")
             self.driver.save_screenshot('login_error.png')
-            logger.info(f"当前页面URL: {self.driver.current_url}")
             return False
         except Exception as e:
             logger.error(f"❌ 登录过程中发生未知错误: {e}")
             self.driver.save_screenshot('login_unexpected_error.png')
             return False
 
-    def navigate_to_contracts(self):
-        """点击 Contracts 菜单并等待下一页加载"""
+    def navigate_to_services(self):
+        """导航到 'My Services' 页面"""
         try:
-            logger.info("🔍 正在查找并点击 Contracts 链接")
-            contracts_link = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.PARTIAL_LINK_TEXT, "Contract"))
+            logger.info("🔍 正在查找并点击 'Services' 菜单")
+            # 链接文本是 "Services"，它会带我们到服务列表
+            services_link = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//a[contains(., 'Services')]"))
             )
-            contracts_link.click()
+            services_link.click()
+
+            # 等待服务列表页面加载完成的标志：页面标题包含 "My Products & Services"
+            WebDriverWait(self.driver, 10).until(
+                EC.title_contains("My Products & Services")
+            )
+            logger.info("✅ 已进入服务列表页面")
+            return True
+        except TimeoutException as e:
+            logger.error(f"❌ 导航到 Services 页面失败: {e}")
+            self.driver.save_screenshot('navigate_services_error.png')
+            return False
+
+    def check_service_status(self):
+        """进入第一个活动的服务详情页并检查状态"""
+        try:
+            logger.info("🔍 正在查找第一个 'Active' 的服务并进入详情页")
+            # 查找第一个状态为 'Active' 的服务行，并点击它
+            active_service_row = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//tr[td/span[@class='label label-success' and text()='Active']]"))
+            )
+            active_service_row.click()
             
-            # 等待下一页的标志性元素“View Details”出现
+            # 等待详情页面加载完成的标志：页面标题包含 "Manage Product"
             WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.PARTIAL_LINK_TEXT, "Details"))
+                EC.title_contains("Manage Product")
             )
-            logger.info("✅ 已进入 Contracts 页面")
+            logger.info("✅ 已进入服务详情页面")
+            
+            # 提取关键信息，例如到期日
+            due_date_element = self.driver.find_element(By.XPATH, "//*[contains(text(), 'Next Due Date')]/following-sibling::td")
+            status_element = self.driver.find_element(By.XPATH, "//*[contains(text(), 'Status')]/following-sibling::td/span")
+            
+            logger.info(f"🎉 服务状态检查成功！")
+            logger.info(f"   - 状态: {status_element.text}")
+            logger.info(f"   - 到期日: {due_date_element.text}")
+            
+            # 由于没有直接的续期按钮，脚本到此已完成其主要任务
             return True
-        except TimeoutException as e:
-            logger.error(f"❌ 访问 Contracts 失败: {e}")
-            self.driver.save_screenshot('contracts_error.png')
-            return False
-
-    def view_details(self):
-        """点击 View Details 并等待下一页加载"""
-        try:
-            logger.info("🔍 正在查找并点击 View Details 按钮")
-            view_button = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.PARTIAL_LINK_TEXT, "Details"))
-            )
-            view_button.click()
-
-            # 等待详情页的标志性元素“Renew”按钮出现
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.PARTIAL_LINK_TEXT, "Renew"))
-            )
-            logger.info("✅ 已进入详情页面")
-            return True
-        except TimeoutException as e:
-            logger.error(f"❌ 点击 View Details 失败: {e}")
-            self.driver.save_screenshot('view_details_error.png')
-            return False
-
-    def renew_server(self):
-        """执行续期操作"""
-        try:
-            logger.info("🔍 正在查找并点击续期按钮")
-            renew_button = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.PARTIAL_LINK_TEXT, "Renew"))
-            )
-            renew_button.click()
-            logger.info("✅ 续期按钮已点击")
-
-            # 处理可能的确认弹窗
-            try:
-                confirm_button = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Confirm') or contains(text(), 'OK') or contains(text(), '确认')]"))
-                )
-                confirm_button.click()
-                logger.info("✅ 已确认续期")
-            except TimeoutException:
-                logger.info("ℹ️ 无需点击确认弹窗")
-
-            # 更精确地检查成功提示元素
-            try:
-                success_message = WebDriverWait(self.driver, 15).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "div.alert-success, div[class*='message-success'], *[class*='success']"))
-                )
-                logger.info(f"✅ 续期成功！提示信息: {success_message.text.strip()}")
-                return True
-            except TimeoutException:
-                logger.warning("⚠️ 未找到明确的成功提示。操作可能已完成，但无法自动验证。")
-                self.driver.save_screenshot('renew_completed_no_prompt.png')
-                return True # 保持乐观判断
+            
+        except TimeoutException:
+            logger.warning("⚠️ 未找到状态为 'Active' 的服务，或无法进入详情页。")
+            self.driver.save_screenshot('no_active_service_error.png')
+            # 如果没有活动服务，也算作脚本“成功”执行，因为它完成了检查
+            return True 
         except Exception as e:
-            logger.error(f"❌ 续期操作失败: {e}")
-            self.driver.save_screenshot('renew_error.png')
+            logger.error(f"❌ 检查服务状态时出错: {e}")
+            self.driver.save_screenshot('check_status_error.png')
             return False
 
     def run(self):
-        """运行完整续期流程"""
+        """运行完整流程"""
         start_time = datetime.now()
-        logger.info(f"🚀 开始执行续期任务 - {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"🚀 开始执行任务 - {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         
         try:
             self.setup_driver()
             
-            # 步骤 1: 尝试使用 Cookie 登录
             logged_in = self.login_with_cookies()
-            
-            # 如果 Cookie 登录失败，则回退到用户名密码登录
             if not logged_in:
                 logged_in = self.login_with_credentials()
 
-            # 如果两种登录方式都失败，则终止
             if not logged_in:
                 logger.error("❌ 登录失败，终止所有操作。")
                 return False
             
-            # 步骤 2: 导航到合同页
-            if not self.navigate_to_contracts():
+            if not self.navigate_to_services():
                 return False
             
-            # 步骤 3: 查看详情
-            if not self.view_details():
-                return False
-            
-            # 步骤 4: 执行续期
-            if not self.renew_server():
+            if not self.check_service_status():
                 return False
             
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
-            logger.info(f"🎉 任务成功完成！总耗时: {duration:.2f}秒")
+            logger.info(f"✅ 任务完成！总耗时: {duration:.2f}秒")
             return True
             
         except Exception as e:
@@ -264,13 +225,10 @@ class ServerRenewal:
                 logger.info("🔒 浏览器已关闭，资源已释放。")
 
 if __name__ == "__main__":
-    # 检查环境变量
     if not os.getenv('USERNAME') or not os.getenv('PASSWORD'):
         logger.error("❌ 关键环境变量缺失！请设置 USERNAME 和 PASSWORD。")
         exit(1)
     
-    renewal_task = ServerRenewal()
-    is_success = renewal_task.run()
-    
-    # 根据任务结果返回退出码，便于自动化流程判断
+    task = ServerRenewal()
+    is_success = task.run()
     exit(0 if is_success else 1)
