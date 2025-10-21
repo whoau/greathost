@@ -39,7 +39,7 @@ jobs:
           GREATHOST_PASSWORD: ${{ secrets.GREATHOST_PASSWORD }}
           HEADLESS: "true"
         run: |
-          python your_script.py
+          python greathost.py
 
       # 可选：提交 README.md 变更（脚本会生成报告）
       - name: Commit README changes
