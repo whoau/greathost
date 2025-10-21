@@ -1,54 +1,53 @@
-name: Greathost Renew
+name: Server Auto Renewal
 
 on:
   schedule:
-    # GitHub Actions 使用 UTC，下面这行表示北京时间 12:00 和 18:00（UTC+8 -> UTC 04:00/10:00）
-    - cron: "0 4,10 * * *"
-  workflow_dispatch:
-
-permissions:
-  contents: write  # 如果需要提交 README.md 变更
+    # 每天中午12点 (UTC 4:00 = 北京时间 12:00)
+    - cron: '0 4 * * *'
+    # 每天下午6点 (UTC 10:00 = 北京时间 18:00)
+    - cron: '0 10 * * *'
+  workflow_dispatch:  # 允许手动触发
 
 jobs:
   renew:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    concurrency:
-      group: greathost-renew
-      cancel-in-progress: true
-
+    
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Playwright
-        run: |
-          pip install playwright==1.48.0
-          python -m playwright install --with-deps chromium
-
-      - name: Run renew script
-        env:
-          GREATHOST_URL: https://greathost.es
-          GREATHOST_SERVER_URLS: ${{ secrets.GREATHOST_SERVER_URLS }}  # 或直接写死
-          GREATHOST_REMEMBER_COOKIE_NAME: remember_web_xxx
-          GREATHOST_REMEMBER_COOKIE_VALUE: ${{ secrets.GREATHOST_REMEMBER_COOKIE_VALUE }}
-          GREATHOST_EMAIL: ${{ secrets.GREATHOST_EMAIL }}
-          GREATHOST_PASSWORD: ${{ secrets.GREATHOST_PASSWORD }}
-          HEADLESS: "true"
-        run: |
-          python greathost.py
-
-      # 可选：提交 README.md 变更（脚本会生成报告）
-      - name: Commit README changes
-        if: always()
-        run: |
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add README.md screens || true
-            git commit -m "chore: update renew report [skip ci]"
-            git push
-          fi
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install selenium==4.15.2
+        
+    - name: 🌐 Install Chrome
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
+        
+    - name: 🔄 Run renewal script
+      env:
+        LOGIN_URL: ${{ secrets.LOGIN_URL }}
+        USERNAME: ${{ secrets.USERNAME }}
+        PASSWORD: ${{ secrets.PASSWORD }}
+      run: |
+        python greathost.py
+        
+    - name: 📸 Upload screenshots on failure
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: error-screenshots-${{ github.run_number }}
+        path: '*.png'
+        retention-days: 7
+        
+    - name: 📧 Notify on failure (optional)
+      if: failure()
+      run: |
+        echo "❌ 续期任务失败，请检查日志"
