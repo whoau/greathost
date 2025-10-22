@@ -28,59 +28,76 @@ def main():
     try:
         print("正在启动 WebDriver...")
         driver = webdriver.Chrome(options=options)
-        # 增加全局等待时间，以应对网络波动
         wait = WebDriverWait(driver, 30)
 
         # 1. 访问您指定的登录网址
         print("1. 正在访问您指定的登录网址 https://greathost.es/login ...")
         driver.get("https://greathost.es/login")
         
-        # --- 【全新增加：处理Cookie弹窗，这是问题的根源】 ---
+        # 2. 处理Cookie弹窗（保留此逻辑作为安全措施）
         try:
             print("2. 正在检查并处理Cookie同意弹窗...")
-            # 等待“Aceptar”(接受)按钮出现，最多等10秒
             cookie_accept_button = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.ID, "btnAccept"))
             )
             cookie_accept_button.click()
             print("✓ 已点击Cookie同意按钮。")
-            # 点击后，最好加一个短暂的等待，让页面元素稳定下来
-            time.sleep(2)
+            time.sleep(2) 
         except TimeoutException:
-            # 如果10秒内没找到这个按钮，说明弹窗可能不存在，直接继续执行，不要报错
             print("✓ 未找到Cookie弹窗，或已处理，继续执行。")
-        # --- 【增加步骤结束】 ---
-
+        
         # 3. 在登录页面输入用户名和密码并登录
         print("3. 正在输入用户名和密码...")
-        wait.until(EC.presence_of_element_located((By.ID, "inputEmail"))).send_keys(GREATHOS_USERNAME)
-        driver.find_element(By.ID, "inputPassword").send_keys(GREATHOS_PASSWORD)
-        driver.find_element(By.ID, "login").click()
+        
+        # --- 【最终、最稳健的修改，解决“竞态条件”问题】 ---
+
+        # 步骤 3.1: 用最严格的方式等待【用户名】输入框变为【可点击】状态
+        print("   - 等待用户名输入框变为可交互状态...")
+        email_input = wait.until(
+            EC.element_to_be_clickable((By.ID, "inputEmail"))
+        )
+        
+        # 步骤 3.2: 用JS将输入框滚动到视图中央，确保不被任何东西遮挡
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", email_input)
+        time.sleep(0.5) # 等待滚动动画完成
+        email_input.send_keys(GREATHOS_USERNAME)
+
+        # 步骤 3.3: 对【密码】输入框执行同样严格的操作
+        print("   - 等待密码输入框变为可交互状态...")
+        password_input = driver.find_element(By.ID, "inputPassword")
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", password_input)
+        time.sleep(0.5)
+        password_input.send_keys(GREATHOS_PASSWORD)
+        
+        # --- 【修改结束】 ---
+        
+        print("   - 正在点击登录按钮...")
+        login_button = driver.find_element(By.ID, "login")
+        driver.execute_script("arguments[0].click();", login_button) # 用JS点击，更稳健
+
         wait.until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Dashboard')]")))
         print("✓ 登录成功！")
 
-        # 4. 导航到 Contracts
+        # 后续步骤保持不变...
         print("4. 正在导航到 'Contracts'...")
         contracts_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(@href, 'contracts')]//span[contains(text(), 'Contracts')]")))
         contracts_link.click()
         wait.until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'My Contracts')]")))
         print("✓ 已进入 'Contracts' 页面。")
 
-        # 5. 查找合同并点击 View Details
         print(f"5. 正在查找合同 '{CONTRACT_IDENTIFIER}'...")
         view_details_xpath = f"//tr[contains(., '{CONTRACT_IDENTIFIER}')]//a[contains(text(), 'View Details')]"
         view_details_button = wait.until(EC.element_to_be_clickable((By.XPATH, view_details_xpath)))
         driver.execute_script("arguments[0].click();", view_details_button)
         print("✓ 已点击 'View Details'。")
 
-        # 6. 点击 Renew
         print("6. 正在查找并点击 'Renew' 按钮...")
         renew_button_xpath = "//button[contains(., 'Renew')]"
         renew_button = wait.until(EC.element_to_be_clickable((By.XPATH, renew_button_xpath)))
-        renew_button.click()
+        driver.execute_script("arguments[0].click();", renew_button)
         print("✓ 已点击 'Renew'。")
 
-        # 7. 验证结果
+        print("7. 正在验证续订流程...")
         wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Checkout') or contains(text(), 'Shopping Cart')]")))
         print("🎉 任务成功！已将续订项目加入购物车。")
         
