@@ -1,176 +1,308 @@
+#!/usr/bin/env python3
 import os
+import re
+import sys
 import time
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-def setup_driver():
-    """设置Chrome浏览器驱动"""
-    chrome_options = Options()
-    chrome_options.add_argument('--headless')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    
-    driver = webdriver.Chrome(options=chrome_options)
-    return driver
+# 简单日志
+def log(msg):
+    print(f"[renew] {msg}", flush=True)
 
-def login(driver, username, password):
-    """登录到GreatHost"""
-    try:
-        print("正在访问登录页面...")
-        driver.get("https://greathost.es/login")
-        time.sleep(3)
-        
-        # 查找并填写用户名
-        print("输入用户名...")
-        username_field = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.NAME, "username"))
-        )
-        username_field.clear()
-        username_field.send_keys(username)
-        
-        # 查找并填写密码
-        print("输入密码...")
-        password_field = driver.find_element(By.NAME, "password")
-        password_field.clear()
-        password_field.send_keys(password)
-        
-        # 点击登录按钮
-        print("点击登录按钮...")
-        login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
-        login_button.click()
-        
-        # 等待登录成功
-        time.sleep(5)
-        print("登录成功!")
-        return True
-        
-    except Exception as e:
-        print(f"登录失败: {str(e)}")
-        return False
-
-def navigate_to_contracts(driver):
-    """导航到Contracts页面"""
-    try:
-        print("正在导航到Contracts页面...")
-        
-        # 查找并点击Contracts链接
-        contracts_link = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Contracts')]"))
-        )
-        contracts_link.click()
-        
-        time.sleep(3)
-        print("已进入Contracts页面")
-        return True
-        
-    except Exception as e:
-        print(f"导航到Contracts失败: {str(e)}")
-        return False
-
-def click_view_details(driver):
-    """点击View Details按钮"""
-    try:
-        print("正在查找View Details按钮...")
-        
-        # 查找View Details按钮
-        view_details_button = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'View Details')] | //a[contains(text(), 'View Details')]"))
-        )
-        view_details_button.click()
-        
-        time.sleep(3)
-        print("已点击View Details")
-        return True
-        
-    except Exception as e:
-        print(f"点击View Details失败: {str(e)}")
-        return False
-
-def renew_contract(driver):
-    """点击续期按钮"""
-    try:
-        print("正在查找续期按钮...")
-        
-        # 查找并点击renew+12hour按钮
-        renew_button = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'renew+12hour')] | //a[contains(text(), 'renew+12hour')]"))
-        )
-        
-        print("找到续期按钮，正在点击...")
-        renew_button.click()
-        
-        time.sleep(3)
-        
-        # 检查是否有确认对话框
+def fill_first_visible(page, selectors, value, timeout=8000):
+    for s in selectors:
         try:
-            confirm_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Confirm')] | //button[contains(text(), '确认')]")
-            if confirm_button:
-                print("发现确认按钮，点击确认...")
-                confirm_button.click()
-                time.sleep(2)
-        except NoSuchElementException:
+            loc = page.locator(s).first
+            loc.wait_for(state="visible", timeout=timeout)
+            # 点击聚焦后填，避免某些脚本验证不触发
+            try:
+                loc.click(timeout=2000)
+            except Exception:
+                pass
+            loc.fill(value, timeout=timeout)
+            return True
+        except Exception:
+            continue
+    return False
+
+def click_any(page, selectors, timeout=8000):
+    for s in selectors:
+        try:
+            loc = page.locator(s).first
+            loc.wait_for(state="visible", timeout=timeout)
+            loc.scroll_into_view_if_needed(timeout=2000)
+            loc.click(timeout=timeout)
+            return True
+        except Exception:
+            continue
+    return False
+
+def click_by_text_candidates(page, patterns, timeout=8000):
+    # 多策略：button/link 文本、任意文本节点
+    for pat in patterns:
+        regex = re.compile(pat, re.I)
+        candidates = [
+            page.get_by_role("button", name=regex).first,
+            page.get_by_role("link", name=regex).first,
+            page.get_by_text(regex).first,
+        ]
+        for loc in candidates:
+            try:
+                loc.wait_for(state="visible", timeout=timeout)
+                loc.scroll_into_view_if_needed(timeout=2000)
+                loc.click(timeout=timeout)
+                return True
+            except Exception:
+                continue
+    return False
+
+def wait_for_any(page, selectors, state="visible", timeout=10000):
+    deadline = time.time() + timeout/1000.0
+    last_err = None
+    for s in selectors:
+        try:
+            page.locator(s).first.wait_for(state=state, timeout=timeout)
+            return True
+        except Exception as e:
+            last_err = e
+            if time.time() > deadline:
+                break
+    if last_err:
+        log(f"wait_for_any last error: {last_err}")
+    return False
+
+def login(page, base_url, email, password):
+    login_url = f"{base_url.rstrip('/')}/login"
+    log(f"访问登录页: {login_url}")
+    page.goto(login_url, wait_until="domcontentloaded")
+    page.wait_for_load_state("networkidle", timeout=20000)
+
+    email_selectors = [
+        'input[name="email"]',
+        'input[type="email"]',
+        'input#email',
+        'input[placeholder*="Email" i]',
+        'input[placeholder*="Correo" i]',
+        'input[name*="user" i]',
+        'input[name*="correo" i]',
+    ]
+    pwd_selectors = [
+        'input[name="password"]',
+        'input[type="password"]',
+        'input#password',
+        'input[placeholder*="Password" i]',
+        'input[placeholder*="Contraseña" i]',
+    ]
+
+    ok_email = fill_first_visible(page, email_selectors, email)
+    ok_pwd = fill_first_visible(page, pwd_selectors, password)
+    if not (ok_email and ok_pwd):
+        log("未找到邮箱/密码输入框，可能需要更新选择器。")
+        return False
+
+    # 登录按钮尝试（多语言）
+    login_clicked = click_any(page, [
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button:has-text("Login")',
+        'button:has-text("Log in")',
+        'button:has-text("Sign in")',
+        'button:has-text("Acceder")',
+        'button:has-text("Iniciar")',
+        'button:has-text("Entrar")',
+        'text=Login',
+        'text=Sign in',
+        'text=Acceder',
+        'text=Iniciar sesión',
+    ], timeout=8000)
+
+    if not login_clicked:
+        # 兜底：在密码框按回车
+        try:
+            page.locator(pwd_selectors[0]).first.press("Enter", timeout=2000)
+        except Exception:
             pass
-        
-        print("续期操作完成!")
-        return True
-        
-    except TimeoutException:
-        print("未找到续期按钮，可能已经续期或页面结构已变化")
+
+    # 等待跳转或出现 dashboard/Contracts
+    try:
+        page.wait_for_load_state("networkidle", timeout=20000)
+    except PWTimeout:
+        pass
+
+    # 登录成功判断：出现 Contracts/Contratos 链接或 URL 离开 /login
+    login_ok = False
+    try:
+        if not page.url.endswith("/login") and "/login" not in page.url:
+            login_ok = True
+    except Exception:
+        pass
+
+    if not login_ok:
+        # 再尝试找 Contracts/Contratos
+        login_ok = wait_for_any(page, [
+            'a:has-text("Contracts")',
+            'text=Contracts',
+            'a:has-text("Contratos")',
+            'text=Contratos',
+        ], timeout=8000)
+
+    log(f"登录状态: {'成功' if login_ok else '失败'}")
+    return login_ok
+
+def goto_contracts(page):
+    log("尝试进入 Contracts 页面")
+    ok = click_by_text_candidates(page, [
+        r'\bContracts?\b',
+        r'\bContratos?\b',
+        r'合同|合约',
+    ], timeout=8000)
+
+    if not ok:
+        # 尝试常见菜单图标/导航按钮
+        ok = click_any(page, [
+            'a[href*="contract"]',
+            'a[href*="contrato"]',
+            'a[href*="/contracts"]',
+        ], timeout=6000)
+
+    if not ok:
+        log("未找到 Contracts 入口，可能界面有变动。")
         return False
-    except Exception as e:
-        print(f"续期失败: {str(e)}")
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except PWTimeout:
+        pass
+    return True
+
+def open_any_contract_details(page):
+    log("在 Contracts 中寻找 View Details")
+    ok = click_by_text_candidates(page, [
+        r'\bView details?\b',
+        r'\bDetails?\b',
+        r'\bVer detalles?\b',
+        r'\bVer\b',
+        r'查看详情|详情',
+    ], timeout=8000)
+
+    if not ok:
+        # 直接点常见选择器
+        ok = click_any(page, [
+            'a:has-text("View")',
+            'a:has-text("Details")',
+            'button:has-text("View")',
+            'button:has-text("Details")',
+            'a[href*="details"]',
+        ], timeout=8000)
+
+    if not ok:
+        log("未找到 View Details 按钮/链接。")
         return False
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except PWTimeout:
+        pass
+    return True
+
+def renew_plus_12h(page):
+    log("尝试点击 Renew +12h")
+    # 接受可能的确认弹窗
+    def on_dialog(dialog):
+        log(f"检测到弹窗: {dialog.message}")
+        try:
+            dialog.accept()
+        except Exception:
+            pass
+    page.on("dialog", on_dialog)
+
+    patterns = [
+        r'renew\s*\+?\s*12\s*h',            # renew +12h / renew 12h
+        r'renew\s*\+?\s*12\s*hour',         # renew +12 hour(s)
+        r'renovar.*\+?\s*12',               # 西语 renovar +12
+        r'extend.*\+?\s*12',                # extend +12
+        r'extender.*\+?\s*12',              # 西语 extender +12
+        r'续.*12',                           # 中文 续期/续订 12
+        r'延长.*12',                         # 中文 延长 12
+        r'\+?\s*12\s*(hours?|h)\b',
+    ]
+
+    ok = click_by_text_candidates(page, patterns, timeout=8000)
+    if not ok:
+        # 常见选择器兜底
+        ok = click_any(page, [
+            'button:has-text("+12")',
+            'a:has-text("+12")',
+            'button:has-text("Renew")',
+            'a:has-text("Renew")',
+            'button:has-text("Renovar")',
+            'a:has-text("Renovar")',
+        ], timeout=8000)
+
+    if ok:
+        # 等待操作完成（按钮可能变灰或出现提示）
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except PWTimeout:
+            pass
+    return ok
 
 def main():
-    """主函数"""
-    # 从环境变量获取登录凭据
-    username = os.environ.get('GREATHOST_USERNAME')
-    password = os.environ.get('GREATHOST_PASSWORD')
-    
-    if not username or not password:
-        print("错误: 请设置GREATHOST_USERNAME和GREATHOST_PASSWORD环境变量")
-        return False
-    
-    driver = None
-    try:
-        # 初始化浏览器
-        driver = setup_driver()
-        
-        # 执行登录
-        if not login(driver, username, password):
-            return False
-        
-        # 导航到Contracts
-        if not navigate_to_contracts(driver):
-            return False
-        
-        # 点击View Details
-        if not click_view_details(driver):
-            return False
-        
-        # 执行续期
-        if not renew_contract(driver):
-            return False
-        
-        print("✅ 所有操作成功完成!")
-        return True
-        
-    except Exception as e:
-        print(f"发生错误: {str(e)}")
-        return False
-    
-    finally:
-        if driver:
-            driver.quit()
-            print("浏览器已关闭")
+    email = os.getenv("GREATHOST_EMAIL")
+    password = os.getenv("GREATHOST_PASSWORD")
+    base_url = os.getenv("BASE_URL", "https://greathost.es").rstrip("/")
+    headless = os.getenv("HEADLESS", "1") != "0"
+
+    if not email or not password:
+        log("请设置环境变量 GREATHOST_EMAIL / GREATHOST_PASSWORD（在 GitHub Secrets 配置）")
+        sys.exit(1)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=headless,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ],
+        )
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118 Safari/537.36",
+            locale="en-US",
+            timezone_id="UTC",
+        )
+        page = context.new_page()
+        page.set_default_timeout(30000)
+
+        try:
+            if not login(page, base_url, email, password):
+                log("登录失败，退出")
+                sys.exit(2)
+
+            if not goto_contracts(page):
+                log("进入 Contracts 失败，退出")
+                sys.exit(3)
+
+            if not open_any_contract_details(page):
+                log("打开某条合约详情失败，退出")
+                sys.exit(4)
+
+            if renew_plus_12h(page):
+                log("续期 +12 小时：已点击成功（若有配额/限制请以页面实际为准）")
+                sys.exit(0)
+            else:
+                log("未找到可点击的续期 +12h 按钮，可能是冷却中或页面变动。")
+                sys.exit(5)
+        finally:
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
+    main()
