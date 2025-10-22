@@ -42,62 +42,58 @@ def main():
             )
             cookie_accept_button.click()
             print("✓ 已点击Cookie同意按钮。")
-            time.sleep(2) 
         except TimeoutException:
             print("✓ 未找到Cookie弹窗，或已处理，继续执行。")
         
-        # 3. 在登录页面输入用户名和密码并登录
-        print("3. 正在输入用户名和密码...")
-        
-        # --- 【最终、最稳健的修改，解决“竞态条件”问题】 ---
+        # --- 【致命错误修复：切换到 iframe 内部】 ---
+        # 这是之前所有失败的根源。登录表单在ID为 "login-iframe" 的iframe里。
+        print("3. 正在切换到登录表单的 iframe 中...")
+        wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "login-iframe")))
+        print("✓ 已成功切换到 iframe。")
+        # --- 【修复结束】 ---
 
-        # 步骤 3.1: 用最严格的方式等待【用户名】输入框变为【可点击】状态
-        print("   - 等待用户名输入框变为可交互状态...")
-        email_input = wait.until(
-            EC.element_to_be_clickable((By.ID, "inputEmail"))
-        )
+        # 4. 在 iframe 内部，输入用户名和密码并登录
+        print("4. 正在输入用户名和密码...")
         
-        # 步骤 3.2: 用JS将输入框滚动到视图中央，确保不被任何东西遮挡
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", email_input)
-        time.sleep(0.5) # 等待滚动动画完成
+        # 现在因为已经在iframe里了，下面的代码可以正常工作
+        email_input = wait.until(EC.element_to_be_clickable((By.ID, "inputEmail")))
         email_input.send_keys(GREATHOS_USERNAME)
-
-        # 步骤 3.3: 对【密码】输入框执行同样严格的操作
-        print("   - 等待密码输入框变为可交互状态...")
+        
         password_input = driver.find_element(By.ID, "inputPassword")
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", password_input)
-        time.sleep(0.5)
         password_input.send_keys(GREATHOS_PASSWORD)
         
-        # --- 【修改结束】 ---
-        
-        print("   - 正在点击登录按钮...")
         login_button = driver.find_element(By.ID, "login")
-        driver.execute_script("arguments[0].click();", login_button) # 用JS点击，更稳健
+        login_button.click()
 
+        # 登录成功后，页面会跳转，driver会自动从iframe跳回到主页面
+        print("   - 等待登录成功并跳转到Dashboard...")
+        
+        # 5. 等待登录成功后的 Dashboard 页面
+        # 此时需要切换回默认内容，因为Dashboard不在iframe里
+        driver.switch_to.default_content()
         wait.until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Dashboard')]")))
         print("✓ 登录成功！")
 
-        # 后续步骤保持不变...
-        print("4. 正在导航到 'Contracts'...")
+        # 后续所有操作都在主页面，无需再动
+        print("6. 正在导航到 'Contracts'...")
         contracts_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(@href, 'contracts')]//span[contains(text(), 'Contracts')]")))
         contracts_link.click()
         wait.until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'My Contracts')]")))
         print("✓ 已进入 'Contracts' 页面。")
 
-        print(f"5. 正在查找合同 '{CONTRACT_IDENTIFIER}'...")
+        print(f"7. 正在查找合同 '{CONTRACT_IDENTIFIER}'...")
         view_details_xpath = f"//tr[contains(., '{CONTRACT_IDENTIFIER}')]//a[contains(text(), 'View Details')]"
         view_details_button = wait.until(EC.element_to_be_clickable((By.XPATH, view_details_xpath)))
         driver.execute_script("arguments[0].click();", view_details_button)
         print("✓ 已点击 'View Details'。")
 
-        print("6. 正在查找并点击 'Renew' 按钮...")
+        print("8. 正在查找并点击 'Renew' 按钮...")
         renew_button_xpath = "//button[contains(., 'Renew')]"
         renew_button = wait.until(EC.element_to_be_clickable((By.XPATH, renew_button_xpath)))
         driver.execute_script("arguments[0].click();", renew_button)
         print("✓ 已点击 'Renew'。")
 
-        print("7. 正在验证续订流程...")
+        print("9. 正在验证续订流程...")
         wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Checkout') or contains(text(), 'Shopping Cart')]")))
         print("🎉 任务成功！已将续订项目加入购物车。")
         
