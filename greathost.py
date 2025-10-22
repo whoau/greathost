@@ -30,15 +30,20 @@ def main():
         driver = webdriver.Chrome(options=options)
         wait = WebDriverWait(driver, 20)
 
-        # 1. 【最终版，严格遵守】使用您指定的网址 https://greathost.es/login
+        # 1. 访问您指定的登录网址 https://greathost.es/login
         print("1. 正在访问您指定的登录网址 https://greathost.es/login ...")
         driver.get("https://greathost.es/login")
         
         # 2. 在登录页面输入用户名和密码并登录
         print("2. 正在输入用户名和密码...")
-        # Selenium会自动处理从 /login 到 /clients/login 的跳转，所以后续元素定位依然有效
-        wait.until(EC.presence_of_element_located((By.ID, "username"))).send_keys(GREATHOS_USERNAME)
-        driver.find_element(By.ID, "password").send_keys(GREATHOS_PASSWORD)
+        
+        # --- 【关键修改点】 ---
+        # 根据网站最新代码，将查找的ID从 "username" 改为 "inputEmail"
+        wait.until(EC.presence_of_element_located((By.ID, "inputEmail"))).send_keys(GREATHOS_USERNAME)
+        # 根据网站最新代码，将查找的ID从 "password" 改为 "inputPassword"
+        driver.find_element(By.ID, "inputPassword").send_keys(GREATHOS_PASSWORD)
+        # --- 【修改结束】 ---
+        
         driver.find_element(By.ID, "login").click()
         wait.until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Dashboard')]")))
         print("✓ 登录成功！")
