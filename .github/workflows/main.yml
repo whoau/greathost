@@ -1,66 +1,40 @@
-name: Renew GreatHost
+name: Greathost Renewal
 
 on:
+  workflow_dispatch:
   schedule:
-    # 每天中午12点（北京时间，UTC+8） => UTC 04:00
-    - cron: '0 4 * * *'
-    # 每天下午6点（北京时间，UTC+8） => UTC 10:00
-    - cron: '0 10 * * *'
-  workflow_dispatch:  # 允许手动触发
+    - cron: "0 4,10 * * *" 
+
+permissions:
+  contents: read
+
+concurrency:
+  group: greathost-renew
+  cancel-in-progress: false
 
 jobs:
   renew:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-        cache: 'pip'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    # 安装 Chrome（Chrome for Testing），不再用 apt 装 google-chrome-stable
-    - name: Setup Chrome (Chrome for Testing)
-      uses: browser-actions/setup-chrome@v1
-      with:
-        chrome-version: stable
+      - name: Install Playwright (Chromium)
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          python -m playwright install --with-deps chromium
 
-    # 安装与 Chrome 主版本匹配的 Chromedriver（通过 CfT 官方 JSON）
-    - name: Install Chromedriver (match CfT)
-      run: |
-        set -euo pipefail
-        sudo apt-get update
-        sudo apt-get install -y jq unzip
-        CHROME_VER=$(google-chrome --version | grep -Eo '[0-9.]+' | head -n1)
-        MAJOR=${CHROME_VER%%.*}
-        JSON="https://googlechromelabs.github.io/chrome-for-testing/latest-versions-per-milestone-with-downloads.json"
-        URL=$(curl -fsSL "$JSON" | jq -r ".milestones[\"$MAJOR\"].downloads.chromedriver[] | select(.platform==\"linux64\") | .url")
-        echo "Chrome version: $CHROME_VER"
-        echo "Chromedriver URL: $URL"
-        curl -fsSL "$URL" -o chromedriver.zip
-        unzip -o chromedriver.zip
-        sudo mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
-        sudo chmod +x /usr/local/bin/chromedriver
-        rm -rf chromedriver.zip chromedriver-linux64
-        google-chrome --version
-        chromedriver --version
-
-    - name: Install Python dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install "selenium>=4.12"
-
-    - name: Run renewal script
-      env:
-        GREATHOST_USERNAME: ${{ secrets.GREATHOST_USERNAME }}
-        GREATHOST_PASSWORD: ${{ secrets.GREATHOST_PASSWORD }}
-      run: |
-        python renew_greathost.py
-
-    - name: Send notification on failure
-      if: failure()
-      run: |
-        echo "续期失败，请检查日志"
+      - name: Run renewal script
+        env:
+          GREATHOST_EMAIL: ${{ secrets.GREATHOST_EMAIL }}
+          GREATHOST_PASSWORD: ${{ secrets.GREATHOST_PASSWORD }}
+          BASE_URL: https://greathost.es
+          HEADLESS: "1"
+        run: |
+          python renew.py
