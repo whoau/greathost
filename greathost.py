@@ -1,113 +1,176 @@
 import os
-import sys
 import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-# --- 从环境变量读取配置信息 ---
-GREATHOS_USERNAME = os.getenv("GREATHOS_USERNAME")
-GREATHOS_PASSWORD = os.getenv("GREATHOS_PASSWORD")
-CONTRACT_IDENTIFIER = os.getenv("CONTRACT_IDENTIFIER")
+def setup_driver():
+    """设置Chrome浏览器驱动"""
+    chrome_options = Options()
+    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    
+    driver = webdriver.Chrome(options=chrome_options)
+    return driver
+
+def login(driver, username, password):
+    """登录到GreatHost"""
+    try:
+        print("正在访问登录页面...")
+        driver.get("https://greathost.es/login")
+        time.sleep(3)
+        
+        # 查找并填写用户名
+        print("输入用户名...")
+        username_field = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.NAME, "username"))
+        )
+        username_field.clear()
+        username_field.send_keys(username)
+        
+        # 查找并填写密码
+        print("输入密码...")
+        password_field = driver.find_element(By.NAME, "password")
+        password_field.clear()
+        password_field.send_keys(password)
+        
+        # 点击登录按钮
+        print("点击登录按钮...")
+        login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+        login_button.click()
+        
+        # 等待登录成功
+        time.sleep(5)
+        print("登录成功!")
+        return True
+        
+    except Exception as e:
+        print(f"登录失败: {str(e)}")
+        return False
+
+def navigate_to_contracts(driver):
+    """导航到Contracts页面"""
+    try:
+        print("正在导航到Contracts页面...")
+        
+        # 查找并点击Contracts链接
+        contracts_link = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Contracts')]"))
+        )
+        contracts_link.click()
+        
+        time.sleep(3)
+        print("已进入Contracts页面")
+        return True
+        
+    except Exception as e:
+        print(f"导航到Contracts失败: {str(e)}")
+        return False
+
+def click_view_details(driver):
+    """点击View Details按钮"""
+    try:
+        print("正在查找View Details按钮...")
+        
+        # 查找View Details按钮
+        view_details_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'View Details')] | //a[contains(text(), 'View Details')]"))
+        )
+        view_details_button.click()
+        
+        time.sleep(3)
+        print("已点击View Details")
+        return True
+        
+    except Exception as e:
+        print(f"点击View Details失败: {str(e)}")
+        return False
+
+def renew_contract(driver):
+    """点击续期按钮"""
+    try:
+        print("正在查找续期按钮...")
+        
+        # 查找并点击renew+12hour按钮
+        renew_button = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'renew+12hour')] | //a[contains(text(), 'renew+12hour')]"))
+        )
+        
+        print("找到续期按钮，正在点击...")
+        renew_button.click()
+        
+        time.sleep(3)
+        
+        # 检查是否有确认对话框
+        try:
+            confirm_button = driver.find_element(By.XPATH, "//button[contains(text(), 'Confirm')] | //button[contains(text(), '确认')]")
+            if confirm_button:
+                print("发现确认按钮，点击确认...")
+                confirm_button.click()
+                time.sleep(2)
+        except NoSuchElementException:
+            pass
+        
+        print("续期操作完成!")
+        return True
+        
+    except TimeoutException:
+        print("未找到续期按钮，可能已经续期或页面结构已变化")
+        return False
+    except Exception as e:
+        print(f"续期失败: {str(e)}")
+        return False
 
 def main():
-    """主执行函数"""
-    if not all([GREATHOS_USERNAME, GREATHOS_PASSWORD, CONTRACT_IDENTIFIER]):
-        print("错误：环境变量 GREATHOS_USERNAME, GREATHOS_PASSWORD, 或 CONTRACT_IDENTIFIER 未设置。")
-        sys.exit(1)
-
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--window-size=1920,1080")
+    """主函数"""
+    # 从环境变量获取登录凭据
+    username = os.environ.get('GREATHOST_USERNAME')
+    password = os.environ.get('GREATHOST_PASSWORD')
+    
+    if not username or not password:
+        print("错误: 请设置GREATHOST_USERNAME和GREATHOST_PASSWORD环境变量")
+        return False
     
     driver = None
     try:
-        print("正在启动 WebDriver...")
-        driver = webdriver.Chrome(options=options)
-        wait = WebDriverWait(driver, 30)
-
-        # 1. 访问您指定的登录网址
-        print("1. 正在访问您指定的登录网址 https://greathost.es/login ...")
-        driver.get("https://greathost.es/login")
+        # 初始化浏览器
+        driver = setup_driver()
         
-        # 2. 处理Cookie弹窗（保留此逻辑作为安全措施）
-        try:
-            print("2. 正在检查并处理Cookie同意弹窗...")
-            cookie_accept_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.ID, "btnAccept"))
-            )
-            cookie_accept_button.click()
-            print("✓ 已点击Cookie同意按钮。")
-        except TimeoutException:
-            print("✓ 未找到Cookie弹窗，或已处理，继续执行。")
+        # 执行登录
+        if not login(driver, username, password):
+            return False
         
-        # --- 【致命错误修复：切换到 iframe 内部】 ---
-        # 这是之前所有失败的根源。登录表单在ID为 "login-iframe" 的iframe里。
-        print("3. 正在切换到登录表单的 iframe 中...")
-        wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "login-iframe")))
-        print("✓ 已成功切换到 iframe。")
-        # --- 【修复结束】 ---
-
-        # 4. 在 iframe 内部，输入用户名和密码并登录
-        print("4. 正在输入用户名和密码...")
+        # 导航到Contracts
+        if not navigate_to_contracts(driver):
+            return False
         
-        # 现在因为已经在iframe里了，下面的代码可以正常工作
-        email_input = wait.until(EC.element_to_be_clickable((By.ID, "inputEmail")))
-        email_input.send_keys(GREATHOS_USERNAME)
+        # 点击View Details
+        if not click_view_details(driver):
+            return False
         
-        password_input = driver.find_element(By.ID, "inputPassword")
-        password_input.send_keys(GREATHOS_PASSWORD)
+        # 执行续期
+        if not renew_contract(driver):
+            return False
         
-        login_button = driver.find_element(By.ID, "login")
-        login_button.click()
-
-        # 登录成功后，页面会跳转，driver会自动从iframe跳回到主页面
-        print("   - 等待登录成功并跳转到Dashboard...")
-        
-        # 5. 等待登录成功后的 Dashboard 页面
-        # 此时需要切换回默认内容，因为Dashboard不在iframe里
-        driver.switch_to.default_content()
-        wait.until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Dashboard')]")))
-        print("✓ 登录成功！")
-
-        # 后续所有操作都在主页面，无需再动
-        print("6. 正在导航到 'Contracts'...")
-        contracts_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(@href, 'contracts')]//span[contains(text(), 'Contracts')]")))
-        contracts_link.click()
-        wait.until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'My Contracts')]")))
-        print("✓ 已进入 'Contracts' 页面。")
-
-        print(f"7. 正在查找合同 '{CONTRACT_IDENTIFIER}'...")
-        view_details_xpath = f"//tr[contains(., '{CONTRACT_IDENTIFIER}')]//a[contains(text(), 'View Details')]"
-        view_details_button = wait.until(EC.element_to_be_clickable((By.XPATH, view_details_xpath)))
-        driver.execute_script("arguments[0].click();", view_details_button)
-        print("✓ 已点击 'View Details'。")
-
-        print("8. 正在查找并点击 'Renew' 按钮...")
-        renew_button_xpath = "//button[contains(., 'Renew')]"
-        renew_button = wait.until(EC.element_to_be_clickable((By.XPATH, renew_button_xpath)))
-        driver.execute_script("arguments[0].click();", renew_button)
-        print("✓ 已点击 'Renew'。")
-
-        print("9. 正在验证续订流程...")
-        wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Checkout') or contains(text(), 'Shopping Cart')]")))
-        print("🎉 任务成功！已将续订项目加入购物车。")
+        print("✅ 所有操作成功完成!")
+        return True
         
     except Exception as e:
-        print(f"✗ 脚本执行失败: {e}")
-        if driver:
-            screenshot_path = "error_screenshot.png"
-            driver.save_screenshot(screenshot_path)
-            print(f"已保存错误截图 '{screenshot_path}'。")
-        sys.exit(1)
+        print(f"发生错误: {str(e)}")
+        return False
+    
     finally:
         if driver:
             driver.quit()
-            print("WebDriver 已关闭。")
+            print("浏览器已关闭")
 
 if __name__ == "__main__":
-    main()
+    success = main()
+    exit(0 if success else 1)
