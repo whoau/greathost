@@ -1,234 +1,139 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import os
-import json
-import logging
-from datetime import datetime
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
-# --- 配置日志 ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# --- 配置信息 ---
+# 警告：请勿将真实的用户名和密码直接硬编码在此处并上传到公共仓库。
+# 推荐使用环境变量或更安全的密钥管理方式。
+GREATHOS_USERNAME = "your_email@example.com"  # 替换为您的登录邮箱
+GREATHOS_PASSWORD = "your_password"          # 替换为您的登录密码
 
-class ServerRenewal:
-    def __init__(self):
-        """初始化配置"""
-        self.url = 'https://greathost.es/login'  # 直接写死登录 URL
-        self.username = os.getenv('USERNAME')
-        self.password = os.getenv('PASSWORD')
-        self.cookie_file = 'cookies.json'
-        self.driver = None
+# 您要续订的合同标识符（例如，与合同关联的域名或服务名称）
+# 脚本会用这个标识符在合同列表中找到正确的合同
+CONTRACT_IDENTIFIER = "your_domain.com" # 例如 "myservice.com" 或 "Web Hosting"
 
-    def setup_driver(self):
-        """配置并初始化 Chrome 驱动"""
-        chrome_options = Options()
-        chrome_options.add_argument('--headless')
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option('useAutomationExtension', False)
+# -----------------
+
+# 设置WebDriver（以Chrome为例）
+# 如果chromedriver不在脚本同级目录或系统PATH中，需要指定路径
+# driver = webdriver.Chrome(executable_path='/path/to/your/chromedriver')
+options = webdriver.ChromeOptions()
+# 如果你想在后台运行，不打开浏览器窗口，请取消下一行的注释
+# options.add_argument("--headless") 
+options.add_argument("--start-maximized") # 最大化窗口，避免元素被遮挡
+driver = webdriver.Chrome(options=options)
+
+# 设置一个全局的显式等待，最长等待时间为20秒
+wait = WebDriverWait(driver, 20)
+
+def login():
+    """登录到GreatHost.es"""
+    try:
+        print("1. 正在打开登录页面...")
+        driver.get("https://greathost.es/clients/login")
+
+        print("2. 正在输入用户名和密码...")
+        # 等待用户名输入框加载完成
+        username_input = wait.until(EC.presence_of_element_located((By.ID, "username")))
+        password_input = driver.find_element(By.ID, "password")
+
+        username_input.send_keys(GREATHOS_USERNAME)
+        password_input.send_keys(GREATHOS_PASSWORD)
+
+        print("3. 正在点击登录按钮...")
+        login_button = driver.find_element(By.ID, "login")
+        login_button.click()
+
+        # 等待登录成功并跳转到Dashboard，判断标志是 "Dashboard" 标题的出现
+        wait.until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'Dashboard')]")))
+        print("✓ 登录成功！已进入Dashboard。")
+        return True
+    except TimeoutException:
+        print("✗ 登录失败：页面加载超时或找不到登录元素。请检查您的网络和网站状态。")
+        return False
+    except Exception as e:
+        print(f"✗ 登录过程中发生未知错误: {e}")
+        return False
+
+def navigate_to_contracts():
+    """从Dashboard导航到Contracts页面"""
+    try:
+        print("4. 正在导航到 'Contracts' 页面...")
+        # 网站导航栏中的"Contracts"链接
+        contracts_link = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(@href, 'contracts')]//span[contains(text(), 'Contracts')]")))
+        contracts_link.click()
+
+        # 等待Contracts页面加载完成
+        wait.until(EC.presence_of_element_located((By.XPATH, "//h1[contains(text(), 'My Contracts')]")))
+        print("✓ 已成功进入 'Contracts' 页面。")
+        return True
+    except TimeoutException:
+        print("✗ 导航失败：找不到 'Contracts' 链接或页面加载超时。")
+        return False
+    except Exception as e:
+        print(f"✗ 导航到 'Contracts' 页面时发生错误: {e}")
+        return False
+
+def renew_contract():
+    """在合同列表中找到指定合同并点击续订"""
+    try:
+        print(f"5. 正在合同列表中查找 '{CONTRACT_IDENTIFIER}'...")
         
-        self.driver = webdriver.Chrome(options=chrome_options)
-        self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-            'source': 'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'
-        })
-        logger.info("✅ 浏览器驱动初始化完成")
-
-    def save_cookies(self):
-        try:
-            cookies = self.driver.get_cookies()
-            with open(self.cookie_file, 'w') as f:
-                json.dump(cookies, f)
-            logger.info(f"✅ Cookies 已成功保存到 {self.cookie_file}")
-        except Exception as e:
-            logger.error(f"❌ 保存 Cookies 失败: {e}")
-
-    def login_with_cookies(self):
-        """尝试使用 Cookie 登录"""
-        if not os.path.exists(self.cookie_file):
-            logger.info("ℹ️ Cookie 文件不存在，将进行常规登录。")
-            return False
-        try:
-            # 必须先访问根域名才能设置 Cookie
-            self.driver.get('https://greathost.es/')
-            with open(self.cookie_file, 'r') as f:
-                cookies = json.load(f)
-            for cookie in cookies:
-                if 'expiry' in cookie:
-                    del cookie['expiry']
-                self.driver.add_cookie(cookie)
-            logger.info("✅ Cookies 已加载，正在刷新页面验证登录状态...")
-            self.driver.get('https://greathost.es/clientarea.php') # 直接访问客户区
-            
-            # 验证登录成功的标志：页面标题包含 "Client Area"
-            WebDriverWait(self.driver, 10).until(
-                EC.title_contains("Client Area")
-            )
-            logger.info("✅ 使用 Cookie 登录成功！")
-            return True
-        except (TimeoutException, Exception) as e:
-            logger.warning(f"⚠️ 使用 Cookie 登录失败: {e}")
-            if os.path.exists(self.cookie_file):
-                os.remove(self.cookie_file)
-            return False
-
-    def login_with_credentials(self):
-        """使用用户名和密码登录"""
-        try:
-            logger.info(f"🌐 正在访问登录页面: {self.url}")
-            self.driver.get(self.url)
-            
-            # 使用更精确的 ID 定位器
-            username_input = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.ID, "inputEmail"))
-            )
-            username_input.clear()
-            username_input.send_keys(self.username)
-            
-            password_input = self.driver.find_element(By.ID, "inputPassword")
-            password_input.clear()
-            password_input.send_keys(self.password)
-            
-            # 检查是否有reCAPTCHA，如果有，脚本无法继续
-            try:
-                self.driver.find_element(By.CLASS_NAME, "g-recaptcha")
-                logger.error("❌ 检测到 reCAPTCHA 验证码，脚本无法自动登录。请尝试使用 Cookie 登录。")
-                self.driver.save_screenshot('recaptcha_error.png')
-                return False
-            except:
-                logger.info("✅ 未检测到 reCAPTCHA，继续登录。")
-
-            login_button = self.driver.find_element(By.ID, "login")
-            login_button.click()
-            
-            # 验证登录成功的标志：页面标题包含 "Client Area"
-            WebDriverWait(self.driver, 15).until(
-                EC.title_contains("Client Area")
-            )
-            logger.info("✅ 用户名密码登录成功")
-            self.save_cookies()
-            return True
-        except TimeoutException:
-            logger.error("❌ 登录失败：超时或用户名/密码错误。")
-            self.driver.save_screenshot('login_error.png')
-            return False
-        except Exception as e:
-            logger.error(f"❌ 登录过程中发生未知错误: {e}")
-            self.driver.save_screenshot('login_unexpected_error.png')
-            return False
-
-    def navigate_to_services(self):
-        """导航到 'My Services' 页面"""
-        try:
-            logger.info("🔍 正在查找并点击 'Services' 菜单")
-            # 链接文本是 "Services"，它会带我们到服务列表
-            services_link = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//a[contains(., 'Services')]"))
-            )
-            services_link.click()
-
-            # 等待服务列表页面加载完成的标志：页面标题包含 "My Products & Services"
-            WebDriverWait(self.driver, 10).until(
-                EC.title_contains("My Products & Services")
-            )
-            logger.info("✅ 已进入服务列表页面")
-            return True
-        except TimeoutException as e:
-            logger.error(f"❌ 导航到 Services 页面失败: {e}")
-            self.driver.save_screenshot('navigate_services_error.png')
-            return False
-
-    def check_service_status(self):
-        """进入第一个活动的服务详情页并检查状态"""
-        try:
-            logger.info("🔍 正在查找第一个 'Active' 的服务并进入详情页")
-            # 查找第一个状态为 'Active' 的服务行，并点击它
-            active_service_row = WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//tr[td/span[@class='label label-success' and text()='Active']]"))
-            )
-            active_service_row.click()
-            
-            # 等待详情页面加载完成的标志：页面标题包含 "Manage Product"
-            WebDriverWait(self.driver, 10).until(
-                EC.title_contains("Manage Product")
-            )
-            logger.info("✅ 已进入服务详情页面")
-            
-            # 提取关键信息，例如到期日
-            due_date_element = self.driver.find_element(By.XPATH, "//*[contains(text(), 'Next Due Date')]/following-sibling::td")
-            status_element = self.driver.find_element(By.XPATH, "//*[contains(text(), 'Status')]/following-sibling::td/span")
-            
-            logger.info(f"🎉 服务状态检查成功！")
-            logger.info(f"   - 状态: {status_element.text}")
-            logger.info(f"   - 到期日: {due_date_element.text}")
-            
-            # 由于没有直接的续期按钮，脚本到此已完成其主要任务
-            return True
-            
-        except TimeoutException:
-            logger.warning("⚠️ 未找到状态为 'Active' 的服务，或无法进入详情页。")
-            self.driver.save_screenshot('no_active_service_error.png')
-            # 如果没有活动服务，也算作脚本“成功”执行，因为它完成了检查
-            return True 
-        except Exception as e:
-            logger.error(f"❌ 检查服务状态时出错: {e}")
-            self.driver.save_screenshot('check_status_error.png')
-            return False
-
-    def run(self):
-        """运行完整流程"""
-        start_time = datetime.now()
-        logger.info(f"🚀 开始执行任务 - {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        # 这个XPath非常关键：
+        # 它查找一个表格行(tr)，这个行中必须包含你指定的CONTRACT_IDENTIFIER文本
+        # 然后在这一行内，查找包含 "View Details" 文本的链接(a)
+        # 这种定位方式比绝对路径更稳定
+        view_details_xpath = f"//tr[contains(., '{CONTRACT_IDENTIFIER}')]//a[contains(text(), 'View Details')]"
         
-        try:
-            self.setup_driver()
-            
-            logged_in = self.login_with_cookies()
-            if not logged_in:
-                logged_in = self.login_with_credentials()
+        view_details_button = wait.until(EC.element_to_be_clickable((By.XPATH, view_details_xpath)))
+        
+        print(f"✓ 找到合同 '{CONTRACT_IDENTIFIER}'，正在点击 'View Details'...")
+        # 使用JavaScript点击，可以避免一些遮挡或不可点击的问题
+        driver.execute_script("arguments[0].click();", view_details_button)
 
-            if not logged_in:
-                logger.error("❌ 登录失败，终止所有操作。")
-                return False
-            
-            if not self.navigate_to_services():
-                return False
-            
-            if not self.check_service_status():
-                return False
-            
-            end_time = datetime.now()
-            duration = (end_time - start_time).total_seconds()
-            logger.info(f"✅ 任务完成！总耗时: {duration:.2f}秒")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ 脚本运行期间发生意外错误: {e}")
-            if self.driver:
-                self.driver.save_screenshot('fatal_error.png')
-            return False
-        finally:
-            if self.driver:
-                self.driver.quit()
-                logger.info("🔒 浏览器已关闭，资源已释放。")
+        print("6. 正在 'View Details' 页面查找并点击 'Renew' 按钮...")
+        # 等待Renew按钮加载完成
+        renew_button_xpath = "//button[contains(., 'Renew')]"  # 假设它是一个包含'Renew'文本的按钮
+        renew_button = wait.until(EC.element_to_be_clickable((By.XPATH, renew_button_xpath)))
+        
+        print("✓ 找到 'Renew' 按钮，正在点击...")
+        renew_button.click()
+        
+        # 续订操作通常会跳转到购物车或支付页面
+        # 等待页面跳转后的某个标志性元素，例如 "Checkout"
+        wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Checkout') or contains(text(), 'Shopping Cart')]")))
+        print("✓ 已成功点击 'Renew' 并进入续订流程页面！")
+        print("脚本任务完成。后续支付流程需要您手动操作。")
+        return True
+        
+    except TimeoutException:
+        print(f"✗ 操作失败：找不到合同 '{CONTRACT_IDENTIFIER}' 或其 'View Details'/'Renew' 按钮。")
+        print("请检查：")
+        print(f"  - '{CONTRACT_IDENTIFIER}' 是否拼写正确且在合同列表中可见。")
+        print("  - 网站的HTML结构是否已改变。")
+        return False
+    except NoSuchElementException:
+        print("✗ 操作失败：元素未找到。可能是页面结构发生了变化。")
+        return False
+    except Exception as e:
+        print(f"✗ 续订过程中发生未知错误: {e}")
+        return False
+
 
 if __name__ == "__main__":
-    if not os.getenv('USERNAME') or not os.getenv('PASSWORD'):
-        logger.error("❌ 关键环境变量缺失！请设置 USERNAME 和 PASSWORD。")
-        exit(1)
-    
-    task = ServerRenewal()
-    is_success = task.run()
-    exit(0 if is_success else 1)
+    if not all([GREATHOS_USERNAME != "your_email@example.com", GREATHOS_PASSWORD != "your_password", CONTRACT_IDENTIFIER != "your_domain.com"]):
+        print("!!! 警告：请先修改脚本中的配置信息（用户名、密码、合同标识符）再运行。")
+    else:
+        try:
+            if login():
+                if navigate_to_contracts():
+                    renew_contract()
+        finally:
+            # 脚本执行完毕后，暂停10秒，方便您查看最后的结果，然后自动关闭浏览器
+            print("\n脚本执行完毕，浏览器将在10秒后关闭...")
+            time.sleep(10)
+            driver.quit()
+            print("浏览器已关闭。")
