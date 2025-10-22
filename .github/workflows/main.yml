@@ -1,53 +1,55 @@
-name: Server Auto Renewal
+# 文件路径: .github/workflows/renew.yml
+name: GreatHost Auto-Renewal Script
 
 on:
+  # 定时触发：已按您的要求修改
   schedule:
-    # 每天中午12点 (UTC 4:00 = 北京时间 12:00)
+    # 每天中午12点 (北京时间) 运行
+    # 对应UTC时间为 4:00
     - cron: '0 4 * * *'
-    # 每天下午6点 (UTC 10:00 = 北京时间 18:00)
+    
+    # 每天下午6点 (北京时间) 运行
+    # 对应UTC时间为 10:00
     - cron: '0 10 * * *'
-  workflow_dispatch:  # 允许手动触发
+
+  # 手动触发：保留此项，方便您在 GitHub Actions 页面随时手动测试
+  workflow_dispatch:
 
 jobs:
-  renew:
+  renew-contract:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
+      # 检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 设置 Python 环境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 安装依赖库
+      - name: Install dependencies
+        run: pip install selenium
+
+      # 安装浏览器
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@v1
       
-    - name: 🐍 Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-        
-    - name: 📦 Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install selenium==4.15.2
-        
-    - name: 🌐 Install Chrome
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y google-chrome-stable
-        
-    - name: 🔄 Run renewal script
-      env:
-        LOGIN_URL: ${{ secrets.LOGIN_URL }}
-        USERNAME: ${{ secrets.USERNAME }}
-        PASSWORD: ${{ secrets.PASSWORD }}
-      run: |
-        python greathost.py
-        
-    - name: 📸 Upload screenshots on failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: error-screenshots-${{ github.run_number }}
-        path: '*.png'
-        retention-days: 7
-        
-    - name: 📧 Notify on failure (optional)
-      if: failure()
-      run: |
-        echo "❌ 续期任务失败，请检查日志"
+      # 运行您的Python脚本（文件名已按要求修改为 greathost.py）
+      - name: Run renewal script
+        run: python greathost.py
+        env:
+          GREATHOS_USERNAME: ${{ secrets.GREATHOS_USERNAME }}
+          GREATHOS_PASSWORD: ${{ secrets.GREATHOS_PASSWORD }}
+          CONTRACT_IDENTIFIER: ${{ secrets.CONTRACT_IDENTIFIER }}
+
+      # 如果脚本失败，上传截图用于调试
+      - name: Upload screenshot on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-screenshot
+          path: error_screenshot.png
