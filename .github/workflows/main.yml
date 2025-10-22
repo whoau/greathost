@@ -1,23 +1,23 @@
-name: Greathost Renewal
+name: Greathost Auto Renew (Single)
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 4,10 * * *" 
+    # 北京时间 12:00 / 18:00（UTC 04:00 / 10:00）
+    - cron: "0 4,10 * * *"
+  workflow_dispatch:
 
 permissions:
-  contents: read
-
-concurrency:
-  group: greathost-renew
-  cancel-in-progress: false
+  contents: write
 
 jobs:
   renew:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -30,11 +30,25 @@ jobs:
           pip install playwright
           python -m playwright install --with-deps chromium
 
-      - name: Run renewal script
+      - name: Run renew script
         env:
-          GREATHOST_EMAIL: ${{ secrets.GREATHOST_EMAIL }}
-          GREATHOST_PASSWORD: ${{ secrets.GREATHOST_PASSWORD }}
           BASE_URL: https://greathost.es
           HEADLESS: "1"
+          README_PATH: README.md
+          GREATHOST_EMAIL: ${{ secrets.GREATHOST_EMAIL }}
+          GREATHOST_PASSWORD: ${{ secrets.GREATHOST_PASSWORD }}
         run: |
           python renew.py
+
+      - name: Commit README if changed (only on success script updates README)
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add README.md
+            git commit -m "docs: Greathost 续期成功 $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+            git push
+          else
+            echo "No README changes to commit."
+          fi
