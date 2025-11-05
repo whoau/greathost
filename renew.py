@@ -4,31 +4,21 @@ import re
 import sys
 import time
 import datetime
+from urllib.parse import urljoin
+from typing import List, Dict, Any
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-# ---------------- 工具 ----------------
+# --------------- 工具 ---------------
 def log(msg):
     print(f"[renew] {msg}", flush=True)
-
-def mask_email(email: str) -> str:
-    try:
-        name, domain = email.split("@", 1)
-        if len(name) <= 2:
-            masked = name[0] + "*" * max(0, len(name)-1)
-        else:
-            masked = name[:2] + "*" * (len(name)-2)
-        return f"{masked}@{domain}"
-    except Exception:
-        return email[:2] + "***"
 
 def now_utc_str():
     return datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def now_bjt_str():
-    # 北京时间 UTC+8（不依赖系统时区）
     return (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S (UTC+8)")
 
-# ---------------- Playwright 便捷函数 ----------------
+# --------------- Playwright 便捷函数 ---------------
 def fill_first_visible(page, selectors, value, timeout=8000):
     for s in selectors:
         try:
@@ -89,7 +79,7 @@ def wait_for_any(page, selectors, state="visible", timeout=10000):
         log(f"wait_for_any last error: {last_err}")
     return False
 
-# ---------------- 页面流程 ----------------
+# --------------- 页面流程 ---------------
 def login(page, base_url, email, password):
     login_url = f"{base_url.rstrip('/')}/login"
     log(f"访问登录页: {login_url}")
@@ -145,7 +135,6 @@ def login(page, base_url, email, password):
     except PWTimeout:
         pass
 
-    # 登录成功：URL 离开 /login 或出现 Contracts 导航
     login_ok = False
     try:
         if "/login" not in page.url:
@@ -181,35 +170,6 @@ def goto_contracts(page):
 
     if not ok:
         log("未找到 Contracts 入口")
-        return False
-
-    try:
-        page.wait_for_load_state("networkidle", timeout=15000)
-    except PWTimeout:
-        pass
-    return True
-
-def open_any_contract_details(page):
-    log("打开某个合约的 View Details")
-    ok = click_by_text_candidates(page, [
-        r'\bView details?\b',
-        r'\bDetails?\b',
-        r'\bVer detalles?\b',
-        r'\bVer\b',
-        r'查看详情|详情',
-    ], timeout=8000)
-
-    if not ok:
-        ok = click_any(page, [
-            'a:has-text("View")',
-            'a:has-text("Details")',
-            'button:has-text("View")',
-            'button:has-text("Details")',
-            'a[href*="details"]',
-        ], timeout=8000)
-
-    if not ok:
-        log("未找到 View Details")
         return False
 
     try:
@@ -258,12 +218,11 @@ def renew_plus_12h(page):
     return ok
 
 def detect_renew_success(page) -> bool:
-    # 根据页面出现的成功提示/状态变化做简单判定
     patterns = [
         r'\brenew(ed|al).*(success|complete|done)\b',
         r'\bsuccess(fully)?\b.*\b(renew|extend)',
         r'\b(renewed|extended)\b',
-        r'renovad[oa]',  # 西语
+        r'renovad[oa]',
         r'续期成功|已续期|延长成功|已延长',
     ]
     try:
@@ -275,12 +234,104 @@ def detect_renew_success(page) -> bool:
         pass
     return False
 
-# ---------------- README 写入（仅成功时） ----------------
-def update_readme_on_success(readme_path: str, base_url: str, account_mask: str):
-    success_line = f"✅ Greathost 续期成功 | 账号: {account_mask} | 时间: {now_utc_str()} / {now_bjt_str()} | 站点: {base_url}"
+# --------------- 详情链接/点击兜底 ---------------
+def collect_detail_urls(page, max_items: int = 0) -> List[str]:
+    urls: List[str] = []
+
+    def add_from_locator(locator) -> bool:
+        try:
+            cnt = locator.count()
+        except Exception:
+            cnt = 0
+        for i in range(cnt):
+            try:
+                href = locator.nth(i).get_attribute("href")
+                if not href:
+                    continue
+                absu = urljoin(page.url, href)
+                if absu not in urls:
+                    urls.append(absu)
+                    if max_items and len(urls) >= max_items:
+                        return True
+            except Exception:
+                continue
+        return False
+
+    patterns = [
+        page.get_by_role("link", name=re.compile(r'view\s*details?', re.I)),
+        page.get_by_role("link", name=re.compile(r'\bdetails?\b', re.I)),
+        page.get_by_role("link", name=re.compile(r'ver\s*detalles?', re.I)),
+        page.locator('a:has-text("View Details")'),
+        page.locator('a:has-text("View")'),
+        page.locator('a:has-text("Details")'),
+        page.locator('a:has-text("Ver")'),
+        page.locator('a[href*="detail"]'),
+        page.locator('a[href*="/contract"]'),
+        page.locator('a[href*="/contracts"]'),
+    ]
+
+    for loc in patterns:
+        try:
+            if add_from_locator(loc):
+                break
+        except Exception:
+            continue
+
+    return urls
+
+def process_by_clicking_on_list(page, count_target: int) -> List[Dict[str, Any]]:
+    # 当列表没有明显的链接 href 时，逐条点击进入详情 → 续期 → 返回列表
+    results: List[Dict[str, Any]] = []
+    if count_target <= 0:
+        return results
+
+    for idx in range(count_target):
+        # 每次重新定位首个“详情”按钮，避免索引变化
+        details_locator = page.locator(
+            'a:has-text("View Details"), button:has-text("View Details"), '
+            'a:has-text("View"), button:has-text("View"), '
+            'a:has-text("Details"), button:has-text("Details"), '
+            'a:has-text("Ver"), button:has-text("Ver")'
+        )
+        try:
+            if details_locator.count() == 0:
+                log("在列表页未找到可点击的详情按钮。")
+                break
+            details_locator.first.scroll_into_view_if_needed(timeout=3000)
+            details_locator.first.click(timeout=8000)
+        except Exception as e:
+            log(f"点击详情按钮失败: {e}")
+            break
+
+        # 到了详情页，执行续期
+        try:
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except PWTimeout:
+                pass
+            clicked = renew_plus_12h(page)
+            success = detect_renew_success(page) if clicked else False
+            results.append({
+                "clicked": clicked,
+                "success": success,
+                "message": "ok" if success else ("clicked" if clicked else "no_button"),
+            })
+        finally:
+            # 返回 Contracts 列表
+            try:
+                page.go_back(wait_until="domcontentloaded")
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                # 兜底再点回菜单
+                goto_contracts(page)
+    return results
+
+# --------------- README 写入（仅显示成功与时间） ---------------
+def update_readme_on_success_multi(readme_path: str):
     section_title = "## Greathost 续期状态"
     start_marker = "<!-- GREATHOST-RENEW-STATUS:START -->"
     end_marker = "<!-- GREATHOST-RENEW-STATUS:END -->"
+    success_line = f"✅ 续期成功 | 时间: {now_utc_str()} / {now_bjt_str()}"
 
     block = (
         f"{section_title}\n\n"
@@ -292,30 +343,34 @@ def update_readme_on_success(readme_path: str, base_url: str, account_mask: str)
     if not os.path.exists(readme_path):
         with open(readme_path, "w", encoding="utf-8") as f:
             f.write(f"# README\n\n{block}\n")
-        log(f"README 不存在，已创建并写入成功状态。")
+        log("README 不存在，已创建并写入成功状态。")
         return
 
     with open(readme_path, "r", encoding="utf-8") as f:
         content = f.read()
 
     if start_marker in content and end_marker in content:
-        # 替换标记之间的内容
         pattern = re.compile(rf"{re.escape(start_marker)}.*?{re.escape(end_marker)}", re.S)
         new_content = pattern.sub(f"{start_marker}\n{success_line}\n{end_marker}", content)
     else:
-        # 追加一个状态段落到文末
         new_content = content.rstrip() + "\n\n" + block + "\n"
 
     with open(readme_path, "w", encoding="utf-8") as f:
         f.write(new_content)
 
-    log("已将续期成功通知写入 README.md")
+    log("已将续期成功写入 README.md（仅显示状态与时间）")
 
-# ---------------- 主流程（单账号） ----------------
+# --------------- 主流程（单账号，最多两台） ---------------
 def main():
     base_url = os.getenv("BASE_URL", "https://greathost.es").rstrip("/")
     headless = os.getenv("HEADLESS", "1") != "0"
     readme_path = os.getenv("README_PATH", "README.md")
+    try:
+        max_servers = int(os.getenv("MAX_SERVERS", "2"))
+    except Exception:
+        max_servers = 2
+    require_all_success = os.getenv("REQUIRE_ALL_SUCCESS", "1") == "1"
+
     email = os.getenv("GREATHOST_EMAIL", "").strip()
     password = os.getenv("GREATHOST_PASSWORD", "")
 
@@ -346,32 +401,55 @@ def main():
                 log("进入 Contracts 失败")
                 sys.exit(3)
 
-            if not open_any_contract_details(page):
-                log("未找到合约详情")
-                sys.exit(4)
+            # 优先：收集详情链接并逐个新页处理
+            detail_urls = collect_detail_urls(page, max_items=max_servers if max_servers > 0 else 0)
+            results: List[Dict[str, Any]] = []
 
-            clicked = renew_plus_12h(page)
-            if not clicked:
-                log("未找到可点击的 +12h（可能冷却中或按钮文案变化）")
-                sys.exit(5)
+            if detail_urls:
+                log(f"发现 {len(detail_urls)} 个详情链接，准备续期。")
+                for i, url in enumerate(detail_urls, 1):
+                    pg = context.new_page()
+                    pg.set_default_timeout(30000)
+                    info = {"clicked": False, "success": False, "message": ""}
+                    try:
+                        pg.goto(url, wait_until="domcontentloaded")
+                        try:
+                            pg.wait_for_load_state("networkidle", timeout=15000)
+                        except PWTimeout:
+                            pass
+                        clicked = renew_plus_12h(pg)
+                        success = detect_renew_success(pg) if clicked else False
+                        info.update({"clicked": clicked, "success": success, "message": "ok" if success else ("clicked" if clicked else "no_button")})
+                    finally:
+                        try: pg.close()
+                        except Exception: pass
+                    results.append(info)
+            else:
+                # 兜底：列表页逐个点击进入详情
+                target = max_servers if max_servers > 0 else 2
+                log(f"未收集到链接，改为在列表页逐个点击处理，目标 {target} 台。")
+                results = process_by_clicking_on_list(page, target)
 
-            success = detect_renew_success(page)
-            if success:
-                update_readme_on_success(readme_path, base_url, mask_email(email))
+            succ = [r for r in results if r.get("success")]
+            log(f"续期结果：成功 {len(succ)}/{len(results)}")
+
+            # 控制 README 更新策略
+            should_update = (len(results) > 0) and (
+                all(r.get("success") for r in results) if require_all_success else any(r.get("success") for r in results)
+            )
+
+            if should_update:
+                update_readme_on_success_multi(readme_path)
                 sys.exit(0)
             else:
-                log("已点击 +12h，但未检测到明确的成功提示，README 不更新。")
-                sys.exit(6)
+                log("本次未达到写入 README 的条件（可能按钮未开放或冷却中）。")
+                sys.exit(5)
 
         finally:
-            try:
-                context.close()
-            except Exception:
-                pass
-            try:
-                browser.close()
-            except Exception:
-                pass
+            try: context.close()
+            except Exception: pass
+            try: browser.close()
+            except Exception: pass
 
 if __name__ == "__main__":
     main()
