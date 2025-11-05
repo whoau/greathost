@@ -1,17 +1,22 @@
-name: Greathost Auto Renew (Single)
+name: Greathost Auto Renew (2 servers)
 
 on:
   schedule:
-    # 北京时间 12:00 / 18:00（UTC 04:00 / 10:00）
+    # 北京时间 12:00 和 18:00（UTC 04:00 / 10:00）
     - cron: "0 4,10 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: greathost-renew
+  cancel-in-progress: false
+
 jobs:
   renew:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,19 +40,21 @@ jobs:
           BASE_URL: https://greathost.es
           HEADLESS: "1"
           README_PATH: README.md
+          MAX_SERVERS: "2"             # 本次最多续期 2 台
+          REQUIRE_ALL_SUCCESS: "1"     # 1=两台都成功才写README；0=至少一台成功就写
           GREATHOST_EMAIL: ${{ secrets.GREATHOST_EMAIL }}
           GREATHOST_PASSWORD: ${{ secrets.GREATHOST_PASSWORD }}
         run: |
           python renew.py
 
-      - name: Commit README if changed (only on success script updates README)
+      - name: Commit README if changed
         if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [ -n "$(git status --porcelain)" ]; then
             git add README.md
-            git commit -m "docs: Greathost 续期成功 $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+            git commit -m "docs: Greathost 续期状态更新 $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
             git push
           else
             echo "No README changes to commit."
