@@ -2,8 +2,8 @@ name: Greathost Auto Renew (2 servers)
 
 on:
   schedule:
-    # 北京时间 12:00 和 18:00（UTC 04:00 / 10:00）
-    - cron: "0 4,10 * * *"
+    # 北京时间 12:00 15：00和 18:00（UTC 04:00 7:00/ 10:00）
+    - cron: "0 4,7,10 * * *"
   workflow_dispatch:
 
 permissions:
